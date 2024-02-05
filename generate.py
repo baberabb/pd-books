@@ -6,9 +6,13 @@ import datasets
 def process_(
     data: datasets.Dataset, tokenizer: PreTrainedTokenizerFast = None, model=None
 ) -> datasets.Dataset:
-    inputs = tokenizer(data["full_text"], return_tensors="pt", padding=True)
+    prompt = f"Extract the Author name from the message. If there is not one return None:\nExample 1:\nLEAVES OF GRASS (1850-1881) by Walt Whitman, with an introd. by Stuart P. Sherman. (The Modern student's library, American division) © on introd.; 27Jan22, A654456. R57007, 9Jan50, Ruth Sherman (W)\nResponce: Walt Whitman\nExample 2:\nMACHAON, by E. F. Benson. pub. abroad in Hutchinson's magazine, Jan. 1923; illus. by Blam,\nResponce:\nE. F. Benson\nExample 3:\nINTERNATIONAL CORRESPONDENCE SCHOOLS. Commercial signs. Instruction paper. Serial 2086. 1st ed.\nResponce:\nNone\nExample 4:\nRAND MCNALLY AND COMPANY. Rand McNally indexed pocket map; tourists' and shippers' guide. © Rand McNally & Co. (PCB) Manitoba. © 9Jun23, A710667. R75878, 19Mar51.\nResponce:\n"
+    inputs = []
+    for x in data["full_text"]:
+        inputs.append(prompt + x)
+    inputs = tokenizer(inputs, return_tensors="pt", padding=True).input_ids
     outputs = model.generate(
-        inputs["input_ids"],
+        inputs,
         max_new_tokens=20,
         do_sample=True,
         temperature=1.0,
