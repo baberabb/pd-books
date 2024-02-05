@@ -13,9 +13,7 @@ rwkv = "RWKV/HF_v5-Eagle-7B"
 DEVICE = "cuda" if torch.cuda.is_available() else "mps"
 
 
-class EndOfFunctionCriteria(StoppingCriteria):
-    """Custom `StoppingCriteria` which checks if all generated functions in the batch are completed."""
-
+class Stop(StoppingCriteria):
     def __init__(
         self, start_length: int, stops: list, tokenizer: PreTrainedTokenizerFast
     ):
@@ -43,22 +41,6 @@ class EndOfFunctionCriteria(StoppingCriteria):
         return all(done)
 
 
-class StoppingCriteriaSub(StoppingCriteria):
-    def __init__(self, stops=None, tokenizer=None):
-        super().__init__()
-        self.stops = stops
-        self.tokenizer = tokenizer
-
-    def __call__(
-        self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs
-    ) -> bool:
-        last_token = input_ids[0][-1]
-        for stop in self.stops:
-            if stop == self.tokenizer.decode(last_token):
-                return True
-        return False
-
-
 def process_(
     data: datasets.Dataset,
     tokenizer: PreTrainedTokenizerFast = None,
@@ -68,11 +50,12 @@ def process_(
     prompt = (
         lambda x: f"Extract the Author name from the message. If there is not one return None:\nExample 1:\nLEAVES OF GRASS (1850-1881) by Walt Whitman, with an introd. by Stuart P. Sherman. (The Modern student's library, American division) © on introd.; 27Jan22, A654456. R57007, 9Jan50, Ruth Sherman (W)\nResponce: Walt Whitman\nExample 2:\nMACHAON, by E. F. Benson. pub. abroad in Hutchinson's magazine, Jan. 1923; illus. by Blam,\nResponce:\nE. F. Benson\nExample 3:\nINTERNATIONAL CORRESPONDENCE SCHOOLS. Commercial signs. Instruction paper. Serial 2086. 1st ed.\nResponce:\nNone\nExample 4:\n{x}\nResponce:\n"
     )
-    (inputs,) = [prompt(x) for x in data["full_text"]]
+    inputs = [prompt(x) for x in data["full_text"]]
     ctx_lens = [len(x) for x in inputs]
     inputs = tokenizer(inputs, return_tensors="pt", padding=True).to(DEVICE)
+    start_length = inputs.input_ids.size(1)
     outputs = model.generate(
-        inputs,
+        **inputs,
         max_new_tokens=20,
         do_sample=True,
         temperature=1.0,
@@ -80,10 +63,10 @@ def process_(
         top_k=0,
         stopping_criteria=StoppingCriteriaList(
             [
-                EndOfFunctionCriteria(
+                Stop(
                     stops=until,
                     tokenizer=tokenizer,
-                    start_length=inputs.shape[1],
+                    start_length=start_length,
                 )
             ]
         ),
@@ -103,25 +86,28 @@ def process_(
 
 
 model = AutoModelForCausalLM.from_pretrained(
-    rwkv, trust_remote_code=True, torch_dtype=torch.float16
+    pythia, trust_remote_code=True, torch_dtype=torch.float16
 ).to(DEVICE)
 
 
 if __name__ == "__main__":
-    data = datasets.load_dataset("baber/cce-renewals", "unmatched")["train"].filter(
-        lambda x: x["author"] is None
+    data = (
+        datasets.load_dataset("baber/cce-renewals", "unmatched")["train"]
+        .filter(lambda x: x["author"] is None)
+        .select(list(range(30)))
     )
     tokenizer = AutoTokenizer.from_pretrained(
-        rwkv, trust_remote_code=True, padding_side="left"
+        "EleutherAI/pythia-160m", trust_remote_code=True
     )
-    # try:
-    #     tokenizer.pad_token_id = tokenizer.eos_token_id
-    # except:
-    #     pass
+    try:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+        tokenizer.padding_side = "left"
+    except:
+        pass
     data = data.map(
         process_,
         batched=True,
         fn_kwargs={"tokenizer": tokenizer, "model": model, "until": ["\n", "\n\n"]},
-        batch_size=64,
+        batch_size=8,
     )
     data.to_parquet("authors")
