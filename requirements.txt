@@ -1,7 +1,9 @@
 pydantic>=2.5.3
-pandas>=2.1.4
-lxml>=5.0.1
-tqdm>=4.66.1
+pandas
+lxml
+tqdm
 datasets
 matplotlib
 fire
+polars
+python-dateutil
