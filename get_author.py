@@ -10,7 +10,7 @@ def process_(
     inputs = []
     for x in data["full_text"]:
         inputs.append(prompt + x)
-    inputs = tokenizer(inputs, return_tensors="pt", padding=True).input_ids
+    inputs = tokenizer(inputs, return_tensors="pt", padding=True).input_ids.to(0)
     outputs = model.generate(
         inputs,
         max_new_tokens=20,
@@ -25,8 +25,8 @@ def process_(
 
 
 model = AutoModelForCausalLM.from_pretrained(
-    "RWKV/HF_v5-Eagle-7B", trust_remote_code=True
-).to(torch.float32)
+    "RWKV/HF_v5-Eagle-7B", trust_remote_code=True, torch_dtype=torch.float16
+).to(0)
 tokenizer = AutoTokenizer.from_pretrained("RWKV/HF_v5-Eagle-7B", trust_remote_code=True)
 
 
