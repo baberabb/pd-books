@@ -68,11 +68,9 @@ def process_(
     prompt = (
         lambda x: f"Extract the Author name from the message. If there is not one return None:\nExample 1:\nLEAVES OF GRASS (1850-1881) by Walt Whitman, with an introd. by Stuart P. Sherman. (The Modern student's library, American division) © on introd.; 27Jan22, A654456. R57007, 9Jan50, Ruth Sherman (W)\nResponce: Walt Whitman\nExample 2:\nMACHAON, by E. F. Benson. pub. abroad in Hutchinson's magazine, Jan. 1923; illus. by Blam,\nResponce:\nE. F. Benson\nExample 3:\nINTERNATIONAL CORRESPONDENCE SCHOOLS. Commercial signs. Instruction paper. Serial 2086. 1st ed.\nResponce:\nNone\nExample 4:\n{x}\nResponce:\n"
     )
-    inputs, ctx_lens = (
-        [prompt(x) for x in data["full_text"]],
-        [len(prompt(x)) for x in data["full_text"]],
-    )
-    inputs = tokenizer(inputs, return_tensors="pt", padding=True).input_ids.to(DEVICE)
+    inputs, = [prompt(x) for x in data["full_text"]]
+    ctx_lens = [len(x) for x in inputs]
+    inputs = tokenizer(inputs, return_tensors="pt", padding=True).to(DEVICE)
     outputs = model.generate(
         inputs,
         max_new_tokens=20,
@@ -107,15 +105,19 @@ def process_(
 model = AutoModelForCausalLM.from_pretrained(
     rwkv, trust_remote_code=True, torch_dtype=torch.float16
 ).to(DEVICE)
-tokenizer = AutoTokenizer.from_pretrained(
-    rwkv, trust_remote_code=True, padding_side="left"
-)
-tokenizer.pad_token_id = 0
+
 
 if __name__ == "__main__":
     data = datasets.load_dataset("baber/cce-renewals", "unmatched")["train"].filter(
         lambda x: x["author"] is None
     )
+    tokenizer = AutoTokenizer.from_pretrained(
+        rwkv, trust_remote_code=True, padding_side="left"
+    )
+    try:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+    except:
+        pass
     data = data.map(
         process_,
         batched=True,
