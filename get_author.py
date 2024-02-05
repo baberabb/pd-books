@@ -1,16 +1,78 @@
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerFast
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedTokenizerFast,
+    StoppingCriteria,
+    StoppingCriteriaList,
+)
 import datasets
+
+pythia = "EleutherAI/pythia-160m"
+rwkv = "RWKV/HF_v5-Eagle-7B"
+DEVICE = "cuda" if torch.cuda.is_available() else "mps"
+
+
+class EndOfFunctionCriteria(StoppingCriteria):
+    """Custom `StoppingCriteria` which checks if all generated functions in the batch are completed."""
+
+    def __init__(
+        self, start_length: int, stops: list, tokenizer: PreTrainedTokenizerFast
+    ):
+        self.start_length = start_length
+        self.eof_strings = stops
+        self.tokenizer = tokenizer
+
+    def __call__(
+        self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs
+    ) -> bool:
+        """Returns true if all generated sequences contain any of the end-of-function strings."""
+        decoded_generations = self.tokenizer.batch_decode(
+            input_ids[:, self.start_length :]
+        )
+        done = []
+        for decoded_generation in decoded_generations:
+            done.append(
+                any(
+                    [
+                        stop_string in decoded_generation
+                        for stop_string in self.eof_strings
+                    ]
+                )
+            )
+        return all(done)
+
+
+class StoppingCriteriaSub(StoppingCriteria):
+    def __init__(self, stops=None, tokenizer=None):
+        super().__init__()
+        self.stops = stops
+        self.tokenizer = tokenizer
+
+    def __call__(
+        self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs
+    ) -> bool:
+        last_token = input_ids[0][-1]
+        for stop in self.stops:
+            if stop == self.tokenizer.decode(last_token):
+                return True
+        return False
 
 
 def process_(
-    data: datasets.Dataset, tokenizer: PreTrainedTokenizerFast = None, model=None
+    data: datasets.Dataset,
+    tokenizer: PreTrainedTokenizerFast = None,
+    model=None,
+    until: list = None,
 ) -> datasets.Dataset:
-    prompt = f"Extract the Author name from the message. If there is not one return None:\nExample 1:\nLEAVES OF GRASS (1850-1881) by Walt Whitman, with an introd. by Stuart P. Sherman. (The Modern student's library, American division) © on introd.; 27Jan22, A654456. R57007, 9Jan50, Ruth Sherman (W)\nResponce: Walt Whitman\nExample 2:\nMACHAON, by E. F. Benson. pub. abroad in Hutchinson's magazine, Jan. 1923; illus. by Blam,\nResponce:\nE. F. Benson\nExample 3:\nINTERNATIONAL CORRESPONDENCE SCHOOLS. Commercial signs. Instruction paper. Serial 2086. 1st ed.\nResponce:\nNone\nExample 4:\nRAND MCNALLY AND COMPANY. Rand McNally indexed pocket map; tourists' and shippers' guide. © Rand McNally & Co. (PCB) Manitoba. © 9Jun23, A710667. R75878, 19Mar51.\nResponce:\n"
-    inputs = []
-    for x in data["full_text"]:
-        inputs.append(prompt + x)
-    inputs = tokenizer(inputs, return_tensors="pt", padding=True).input_ids.to(0)
+    prompt = (
+        lambda x: f"Extract the Author name from the message. If there is not one return None:\nExample 1:\nLEAVES OF GRASS (1850-1881) by Walt Whitman, with an introd. by Stuart P. Sherman. (The Modern student's library, American division) © on introd.; 27Jan22, A654456. R57007, 9Jan50, Ruth Sherman (W)\nResponce: Walt Whitman\nExample 2:\nMACHAON, by E. F. Benson. pub. abroad in Hutchinson's magazine, Jan. 1923; illus. by Blam,\nResponce:\nE. F. Benson\nExample 3:\nINTERNATIONAL CORRESPONDENCE SCHOOLS. Commercial signs. Instruction paper. Serial 2086. 1st ed.\nResponce:\nNone\nExample 4:\n{x}\nResponce:\n"
+    )
+    inputs, ctx_lens = (
+        [prompt(x) for x in data["full_text"]],
+        [len(prompt(x)) for x in data["full_text"]],
+    )
+    inputs = tokenizer(inputs, return_tensors="pt", padding=True).input_ids.to(DEVICE)
     outputs = model.generate(
         inputs,
         max_new_tokens=20,
@@ -18,17 +80,37 @@ def process_(
         temperature=1.0,
         top_p=0.3,
         top_k=0,
+        stopping_criteria=StoppingCriteriaList(
+            [
+                EndOfFunctionCriteria(
+                    stops=until,
+                    tokenizer=tokenizer,
+                    start_length=inputs.shape[1],
+                )
+            ]
+        ),
     )
-    for x, y in zip(data, outputs):
-        x["author"] = tokenizer.decode(y.tolist(), skip_special_tokens=True)
+
+    processed = [
+        tokenizer.decode(y, skip_special_tokens=True)[ctx_len:]
+        for y, ctx_len in zip(outputs.tolist(), ctx_lens)
+    ]
+    output = []
+    for term in processed:
+        for stop in until:
+            term = term.split(stop)[0]
+        output.append(term)
+    data["author"] = processed
     return data
 
 
 model = AutoModelForCausalLM.from_pretrained(
-    "RWKV/HF_v5-Eagle-7B", trust_remote_code=True, torch_dtype=torch.float16
-).to(0)
-tokenizer = AutoTokenizer.from_pretrained("RWKV/HF_v5-Eagle-7B", trust_remote_code=True)
-
+    rwkv, trust_remote_code=True, torch_dtype=torch.float16
+).to(DEVICE)
+tokenizer = AutoTokenizer.from_pretrained(
+    rwkv, trust_remote_code=True, padding_side="left"
+)
+tokenizer.pad_token_id = 0
 
 if __name__ == "__main__":
     data = datasets.load_dataset("baber/cce-renewals", "unmatched")["train"].filter(
@@ -37,6 +119,7 @@ if __name__ == "__main__":
     data = data.map(
         process_,
         batched=True,
-        fn_kwargs={"tokenizer": tokenizer, "model": model},
+        fn_kwargs={"tokenizer": tokenizer, "model": model, "until": ["\n", "\n\n"]},
         batch_size=64,
     )
+    print(data["author"])
