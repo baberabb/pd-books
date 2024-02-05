@@ -68,7 +68,7 @@ def process_(
     prompt = (
         lambda x: f"Extract the Author name from the message. If there is not one return None:\nExample 1:\nLEAVES OF GRASS (1850-1881) by Walt Whitman, with an introd. by Stuart P. Sherman. (The Modern student's library, American division) © on introd.; 27Jan22, A654456. R57007, 9Jan50, Ruth Sherman (W)\nResponce: Walt Whitman\nExample 2:\nMACHAON, by E. F. Benson. pub. abroad in Hutchinson's magazine, Jan. 1923; illus. by Blam,\nResponce:\nE. F. Benson\nExample 3:\nINTERNATIONAL CORRESPONDENCE SCHOOLS. Commercial signs. Instruction paper. Serial 2086. 1st ed.\nResponce:\nNone\nExample 4:\n{x}\nResponce:\n"
     )
-    inputs, = [prompt(x) for x in data["full_text"]]
+    (inputs,) = [prompt(x) for x in data["full_text"]]
     ctx_lens = [len(x) for x in inputs]
     inputs = tokenizer(inputs, return_tensors="pt", padding=True).to(DEVICE)
     outputs = model.generate(
@@ -114,14 +114,14 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(
         rwkv, trust_remote_code=True, padding_side="left"
     )
-    try:
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-    except:
-        pass
+    # try:
+    #     tokenizer.pad_token_id = tokenizer.eos_token_id
+    # except:
+    #     pass
     data = data.map(
         process_,
         batched=True,
         fn_kwargs={"tokenizer": tokenizer, "model": model, "until": ["\n", "\n\n"]},
         batch_size=64,
     )
-    print(data["author"])
+    data.to_parquet("authors")
