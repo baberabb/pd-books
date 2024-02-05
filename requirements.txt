@@ -7,3 +7,4 @@ matplotlib
 fire
 polars
 python-dateutil
+git+https://github.com/BBuf/transformers.git
